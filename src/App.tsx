@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import Cropper, { type Area } from 'react-easy-crop';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
@@ -25,6 +25,51 @@ const formatSize = (bytes: number) => bytes >= 1024 * 1024
   ? `${(bytes / (1024 * 1024)).toFixed(2)} MB`
   : `${(bytes / 1024).toFixed(1)} KB`;
 
+const SIZE_OPTIONS = [
+  { label: '100KB', value: 100 / 1024 },
+  { label: '300KB', value: 300 / 1024 },
+  { label: '500KB', value: 500 / 1024 },
+  { label: '1MB', value: 1 },
+  { label: '2MB', value: 2 },
+];
+
+function ImagePreview({ blob, fileName, onClose }: { blob: Blob; fileName: string; onClose: () => void }) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
+  const [actualSize, setActualSize] = useState(false);
+
+  useEffect(() => {
+    const url = URL.createObjectURL(blob);
+    if (imageRef.current) imageRef.current.src = url;
+    const dialog = dialogRef.current;
+    dialog?.showModal();
+    return () => {
+      URL.revokeObjectURL(url);
+    };
+  }, [blob]);
+
+  return (
+    <dialog ref={dialogRef} onCancel={(event) => { event.preventDefault(); onClose(); }} aria-label="압축 결과 미리보기"
+      className="m-auto w-[95vw] max-w-5xl rounded-2xl p-4 backdrop:bg-black/60">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+        <div className="min-w-0">
+          <p className="font-bold break-all">{fileName}</p>
+          <p className="text-xs text-slate-500">{formatSize(blob.size)} · 작은 글자와 세부 표현을 확인하세요.</p>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={() => setActualSize(!actualSize)} className="px-3 py-2 rounded-lg bg-slate-100 text-sm">
+            {actualSize ? '화면에 맞추기' : '실제 크기로 보기 (100%)'}
+          </button>
+          <button onClick={onClose} className="px-3 py-2 rounded-lg bg-slate-800 text-white text-sm">닫기</button>
+        </div>
+      </div>
+      <div className="max-h-[75vh] overflow-auto bg-slate-100 rounded-lg">
+        <img ref={imageRef} alt={`${fileName} 압축 결과`} className={actualSize ? 'max-w-none' : 'max-w-full max-h-[75vh] mx-auto object-contain'} />
+      </div>
+    </dialog>
+  );
+}
+
 const ASPECT_RATIOS = [
   { label: '증명/프로필 (3:4)', value: 3 / 4 },
   { label: '모바일 세로 (9:16)', value: 9 / 16 },
@@ -36,7 +81,8 @@ const ASPECT_RATIOS = [
 export default function App() {
   const [tab, setTab] = useState<'single' | 'batch'>('single');
   const [aspect, setAspect] = useState<number>(3 / 4);
-  const [targetSizeMB, setTargetSizeMB] = useState<number>(1);
+  const [targetSizeMB, setTargetSizeMB] = useState<number>(300 / 1024);
+  const [preview, setPreview] = useState<{ blob: Blob; fileName: string } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
   // --- 1장 정밀 모드 상태 ---
@@ -296,7 +342,7 @@ export default function App() {
               {/* 중앙 기준 자동 크롭 안내 문구 */}
               <div className="flex items-center gap-2 px-3.5 py-2.5 bg-indigo-50/70 border border-indigo-100 rounded-xl text-xs text-indigo-800 font-medium">
                 <Info className="w-4 h-4 flex-shrink-0 text-indigo-600" />
-                <span>화면 중앙을 기준으로 자동 크롭됩니다.</span>
+                <span>가로·세로 사진 모두 중앙을 기준으로 선택한 비율에 맞춰 자릅니다.</span>
               </div>
 
               <label className={`border-2 border-dashed rounded-xl p-8 flex flex-col items-center justify-center cursor-pointer transition ${
@@ -374,6 +420,11 @@ export default function App() {
                           </p>
                         </div>
                         <button
+                          onClick={() => setPreview({ blob: result.blob, fileName: result.fileName })}
+                          aria-label={`${result.fileName} 미리보기`}
+                          className="px-3 py-2 text-xs font-semibold text-indigo-700 bg-indigo-50 rounded-lg hover:bg-indigo-100"
+                        >미리보기</button>
+                        <button
                           onClick={() => saveAs(result.blob, result.fileName)}
                           aria-label={`${result.fileName} 다운로드`}
                           className="flex items-center gap-1 px-3 py-2 text-xs font-semibold text-emerald-700 bg-emerald-50 rounded-lg hover:bg-emerald-100"
@@ -414,8 +465,8 @@ export default function App() {
           {/* 목표 용량 선택 */}
           <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
             <h3 className="text-sm font-bold text-slate-700 mb-3">2. 사진당 최대 용량</h3>
-            <div className="flex gap-2">
-              {[0.5, 1, 2].map((mb) => (
+            <div className="grid grid-cols-3 gap-2">
+              {SIZE_OPTIONS.map(({ label, value: mb }) => (
                 <button
                   key={mb}
                   onClick={() => setTargetSizeMB(mb)}
@@ -425,10 +476,13 @@ export default function App() {
                       : 'border-slate-200 hover:bg-slate-50 text-slate-600'
                   }`}
                 >
-                  {mb >= 1 ? `${mb}MB` : `${mb * 1000}KB`}
+                  {label}
                 </button>
               ))}
             </div>
+            {targetSizeMB === 100 / 1024 && (
+              <p className="mt-3 text-xs text-amber-700" role="status">100KB는 작은 글자·세부 표현이 흐려질 수 있어요. 압축 후 미리보기로 확인하세요.</p>
+            )}
           </div>
 
           {/* 동작 버튼 */}
@@ -457,6 +511,10 @@ export default function App() {
                     </span>
                   </div>
 
+                  <button
+                    onClick={() => setPreview({ blob: singleResult.blob, fileName: `${singleFileName}_resized.jpg` })}
+                    className="w-full py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold rounded-xl"
+                  >압축 결과 미리보기</button>
                   <div className="flex gap-2">
                     <button
                       onClick={copyToClipboard}
@@ -505,6 +563,7 @@ export default function App() {
           )}
         </div>
       </main>
+      {preview && <ImagePreview blob={preview.blob} fileName={preview.fileName} onClose={() => setPreview(null)} />}
     </div>
   );
 }
