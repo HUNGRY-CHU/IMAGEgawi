@@ -1,3 +1,4 @@
+import './site-header.css';
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import Cropper, { type Area } from 'react-easy-crop';
 import JSZip from 'jszip';
@@ -8,7 +9,6 @@ import {
   UploadCloud,
   Download,
   Copy,
-  ShieldCheck,
   RefreshCw,
   Archive,
   Layers,
@@ -269,14 +269,23 @@ export default function App() {
       onDrop={handleDrop}
     >
       {/* 헤더 */}
-      <header className="bg-white border-b border-slate-200 py-3.5 px-6 flex justify-between items-center shadow-xs">
+      <header className="gawi-header">
         <div>
-          <h1 className="text-xl font-bold text-slate-900">이미지 가위</h1>
-          <p className="text-xs text-slate-500">원하는 비율로 자르고, 필요한 용량으로 압축하세요</p>
+          <h1>이미지 가위</h1>
+          <p>원하는 비율로 자르고, 필요한 용량으로 압축하세요</p>
         </div>
-        <div className="flex items-center text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-full font-medium">
-          <ShieldCheck className="w-4 h-4 mr-1.5" />
-          서버 전송 없음 (100% 브라우저 내 안전 처리)
+        <div className="gawi-header-actions">
+          <nav className="gawi-nav" aria-label="가위 도구">
+            <a href="/" aria-current="page">이미지 가위</a>
+            <a href="https://pdf.gawi.cc/">PDF 가위</a>
+          </nav>
+          <span className="gawi-privacy">
+            <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 22s7-3 7-9V5l-7-3-7 3v8c0 6 7 9 7 9Z" />
+              <path d="m9 12 2 2 4-4" />
+            </svg>
+            서버 전송 없음
+          </span>
         </div>
       </header>
 
