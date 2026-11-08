@@ -2,7 +2,7 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import Cropper, { type Area } from 'react-easy-crop';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
-import { getCroppedImg, compressImage } from './utils/cropImage';
+import { getCroppedImg, compressImage, extensionFor, toClipboardPng, type OutputFormat } from './utils/cropImage';
 import { centerCropAndCompress } from './utils/batchProcess';
 import {
   UploadCloud,
@@ -19,7 +19,7 @@ import {
   Info
 } from 'lucide-react';
 
-type BatchResult = { blob: Blob; fileName: string; originalSize: number };
+type BatchResult = { blob: Blob; fileName: string; originalSize: number; targetBytes: number };
 
 const formatSize = (bytes: number) => bytes >= 1024 * 1024
   ? `${(bytes / (1024 * 1024)).toFixed(2)} MB`
@@ -71,6 +71,7 @@ function ImagePreview({ blob, fileName, onClose }: { blob: Blob; fileName: strin
 }
 
 const ASPECT_RATIOS = [
+  { label: '원본 비율 유지 (자르지 않기)', value: null },
   { label: '증명/프로필 (3:4)', value: 3 / 4 },
   { label: '모바일 세로 (9:16)', value: 9 / 16 },
   { label: '공문 활동사진 (4:3)', value: 4 / 3 },
@@ -80,8 +81,13 @@ const ASPECT_RATIOS = [
 
 export default function App() {
   const [tab, setTab] = useState<'single' | 'batch'>('single');
-  const [aspect, setAspect] = useState<number>(3 / 4);
-  const [targetSizeMB, setTargetSizeMB] = useState<number>(300 / 1024);
+  const [aspect, setAspect] = useState<number | null>(3 / 4);
+  const [presetSizeMB, setPresetSizeMB] = useState<number>(300 / 1024);
+  const [customSizeKB, setCustomSizeKB] = useState<string | null>(null);
+  const targetSizeMB = customSizeKB === null ? presetSizeMB : Number(customSizeKB) / 1024;
+  const validSize = Number.isFinite(targetSizeMB) && targetSizeMB >= 1 / 1024;
+  const [outputFormat, setOutputFormat] = useState<OutputFormat>('image/jpeg');
+  const [jpegBackground, setJpegBackground] = useState('#ffffff');
   const [preview, setPreview] = useState<{ blob: Blob; fileName: string } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
@@ -92,7 +98,7 @@ export default function App() {
   const [zoom, setZoom] = useState(1);
   const [croppedAreaPixels, setCroppedAreaPixels] = useState<Area | null>(null);
   const [isSingleProcessing, setIsSingleProcessing] = useState(false);
-  const [singleResult, setSingleResult] = useState<{ sizeKB: number; url: string; blob: Blob } | null>(null);
+  const [singleResult, setSingleResult] = useState<{ url: string; blob: Blob; fileName: string; targetBytes: number } | null>(null);
 
   // --- 여러 장 일괄 모드 상태 ---
   const [batchFiles, setBatchFiles] = useState<File[]>([]);
@@ -100,6 +106,13 @@ export default function App() {
   const [isBatchProcessing, setIsBatchProcessing] = useState(false);
   const [batchResults, setBatchResults] = useState<BatchResult[]>([]);
   const [isZipProcessing, setIsZipProcessing] = useState(false);
+
+  const busy = isSingleProcessing || isBatchProcessing || isZipProcessing;
+
+  useEffect(() => {
+    if (!singleResult) return;
+    return () => URL.revokeObjectURL(singleResult.url);
+  }, [singleResult]);
 
   // 드래그 앤 드롭 공통 핸들러
   const handleDragOver = (e: React.DragEvent) => {
@@ -119,7 +132,7 @@ export default function App() {
     e.stopPropagation();
     setIsDragging(false);
 
-    if (isBatchProcessing || isZipProcessing) return;
+    if (busy) return;
 
     const droppedFiles = Array.from(e.dataTransfer.files).filter((file) =>
       file.type.startsWith('image/')
@@ -143,6 +156,9 @@ export default function App() {
 
     const reader = new FileReader();
     reader.addEventListener('load', () => {
+      setCrop({ x: 0, y: 0 });
+      setZoom(1);
+      setCroppedAreaPixels(null);
       setSingleImageSrc(reader.result as string);
       setSingleResult(null);
     });
@@ -167,17 +183,18 @@ export default function App() {
 
   // 1장 크롭 및 압축
   const handleSingleProcess = async () => {
-    if (!singleImageSrc || !croppedAreaPixels) return;
+    if (!singleImageSrc || (aspect !== null && !croppedAreaPixels) || !validSize || busy) return;
     setIsSingleProcessing(true);
     try {
-      const croppedBlob = await getCroppedImg(singleImageSrc, croppedAreaPixels);
-      const finalBlob = await compressImage(croppedBlob, targetSizeMB);
+      const croppedBlob = await getCroppedImg(singleImageSrc, aspect === null ? null : croppedAreaPixels, outputFormat, jpegBackground);
+      const finalBlob = await compressImage(croppedBlob, targetSizeMB, outputFormat);
       const url = URL.createObjectURL(finalBlob);
 
       setSingleResult({
-        sizeKB: Math.round(finalBlob.size / 1024),
         url,
         blob: finalBlob,
+        fileName: `${singleFileName}_resized.${extensionFor(outputFormat)}`,
+        targetBytes: targetSizeMB * 1024 * 1024,
       });
     } catch {
       alert('이미지 처리 중 오류가 발생했습니다.');
@@ -190,9 +207,8 @@ export default function App() {
   const copyToClipboard = async () => {
     if (!singleResult) return;
     try {
-      const pngBlob = new Blob([singleResult.blob], { type: 'image/png' });
       await navigator.clipboard.write([
-        new ClipboardItem({ 'image/png': pngBlob }),
+        new ClipboardItem({ 'image/png': toClipboardPng(singleResult.blob) }),
       ]);
       alert('클립보드에 복사되었습니다! 공문서에 Ctrl+V로 붙여넣으세요.');
     } catch {
@@ -202,7 +218,7 @@ export default function App() {
 
   // 변환 결과를 보관하여 개별 저장과 ZIP 저장에 함께 사용합니다.
   const handleBatchProcess = async () => {
-    if (batchFiles.length === 0 || isBatchProcessing || isZipProcessing) return;
+    if (batchFiles.length === 0 || busy || !validSize) return;
     setIsBatchProcessing(true);
     setBatchProgress(0);
     setBatchResults([]);
@@ -212,15 +228,15 @@ export default function App() {
     try {
       for (let i = 0; i < batchFiles.length; i++) {
         const file = batchFiles[i];
-        const { blob, fileName } = await centerCropAndCompress(file, aspect, targetSizeMB);
-        const baseName = fileName.replace(/\.jpg$/, '');
+        const { blob, fileName } = await centerCropAndCompress(file, aspect, targetSizeMB, outputFormat, jpegBackground);
+        const baseName = fileName.replace(/\.[^.]+$/, '');
         let uniqueName = fileName;
         let suffix = 2;
         while (usedNames.has(uniqueName.toLowerCase())) {
-          uniqueName = `${baseName}_${suffix++}.jpg`;
+          uniqueName = `${baseName}_${suffix++}.${extensionFor(outputFormat)}`;
         }
         usedNames.add(uniqueName.toLowerCase());
-        results.push({ blob, fileName: uniqueName, originalSize: file.size });
+        results.push({ blob, fileName: uniqueName, originalSize: file.size, targetBytes: targetSizeMB * 1024 * 1024 });
         setBatchProgress(Math.round(((i + 1) / batchFiles.length) * 100));
       }
       setBatchResults(results);
@@ -268,6 +284,7 @@ export default function App() {
       <div className="max-w-5xl w-full mx-auto px-6 pt-5">
         <div className="flex bg-slate-200 p-1 rounded-xl w-fit">
           <button
+            disabled={busy}
             onClick={() => setTab('single')}
             className={`flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-lg transition ${
               tab === 'single' ? 'bg-white text-indigo-600 shadow-xs' : 'text-slate-600 hover:text-slate-900'
@@ -276,6 +293,7 @@ export default function App() {
             <CropIcon className="w-3.5 h-3.5" /> 1장 정밀 크롭
           </button>
           <button
+            disabled={busy}
             onClick={() => setTab('batch')}
             className={`flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-lg transition ${
               tab === 'batch' ? 'bg-white text-indigo-600 shadow-xs' : 'text-slate-600 hover:text-slate-900'
@@ -296,15 +314,16 @@ export default function App() {
                 isDragging ? 'border-indigo-500 bg-indigo-50/50' : 'border-slate-300 hover:bg-slate-50'
               }`}>
                 <UploadCloud className="w-12 h-12 text-slate-400 mb-2" />
-                <span className="font-semibold text-slate-700">공문에 넣을 사진을 끌어다 놓으세요</span>
+                <span className="font-semibold text-slate-700">용량을 줄일 이미지를 끌어다 놓으세요</span>
                 <span className="text-xs text-slate-400 mt-1">또는 클릭하여 파일 선택 (여러 장 선택 시 일괄 모드로 자동 전환)</span>
-                <input type="file" accept="image/*" multiple onChange={handleSingleFileInput} className="hidden" />
+                <input type="file" disabled={busy} accept="image/*" multiple onChange={handleSingleFileInput} className="hidden" />
               </label>
             ) : (
               <div className="flex-1 flex flex-col">
                 <div className="flex justify-between items-center mb-2">
-                  <span className="text-xs font-bold text-slate-600">위치를 드래그하여 맞추세요</span>
+                  <span className="text-xs font-bold text-slate-600">{aspect === null ? '전체 이미지를 자르지 않고 압축합니다' : '위치를 드래그하여 맞추세요'}</span>
                   <button
+                    disabled={busy}
                     onClick={() => { setSingleImageSrc(null); setSingleResult(null); }}
                     className="text-xs text-rose-500 hover:underline flex items-center gap-1"
                   >
@@ -312,7 +331,9 @@ export default function App() {
                   </button>
                 </div>
                 <div className="relative w-full h-[380px] bg-slate-950 rounded-xl overflow-hidden">
-                  <Cropper
+                  {aspect === null ? (
+                    <img src={singleImageSrc} alt="압축할 원본 이미지" className="w-full h-full object-contain" />
+                  ) : <Cropper
                     image={singleImageSrc}
                     crop={crop}
                     zoom={zoom}
@@ -320,9 +341,9 @@ export default function App() {
                     onCropChange={setCrop}
                     onCropComplete={onCropComplete}
                     onZoomChange={setZoom}
-                  />
+                  />}
                 </div>
-                <div className="mt-4 flex items-center gap-3">
+                {aspect !== null && <div className="mt-4 flex items-center gap-3">
                   <span className="text-xs font-medium text-slate-500">확대</span>
                   <input
                     type="range"
@@ -331,9 +352,10 @@ export default function App() {
                     max={3}
                     step={0.1}
                     onChange={(e) => setZoom(Number(e.target.value))}
+                    disabled={busy}
                     className="flex-1 accent-indigo-600 cursor-pointer"
                   />
-                </div>
+                </div>}
               </div>
             )
           ) : (
@@ -342,7 +364,7 @@ export default function App() {
               {/* 중앙 기준 자동 크롭 안내 문구 */}
               <div className="flex items-center gap-2 px-3.5 py-2.5 bg-indigo-50/70 border border-indigo-100 rounded-xl text-xs text-indigo-800 font-medium">
                 <Info className="w-4 h-4 flex-shrink-0 text-indigo-600" />
-                <span>가로·세로 사진 모두 중앙을 기준으로 선택한 비율에 맞춰 자릅니다.</span>
+                <span>{aspect === null ? '각 사진의 원본 비율을 유지하며 자르지 않고 압축합니다.' : '가로·세로 사진 모두 중앙을 기준으로 선택한 비율에 맞춰 자릅니다.'}</span>
               </div>
 
               <label className={`border-2 border-dashed rounded-xl p-8 flex flex-col items-center justify-center cursor-pointer transition ${
@@ -353,12 +375,12 @@ export default function App() {
                 <span className="text-xs text-slate-400 mt-1">파일들을 계속 추가할 수 있습니다</span>
                 <input
                   type="file"
-                  disabled={isBatchProcessing || isZipProcessing}
+                  disabled={busy}
                   accept="image/*"
                   multiple
                   onChange={(e) => {
                     if (e.target.files) {
-                      setBatchFiles((prev) => [...prev, ...Array.from(e.target.files!)]);
+                      setBatchFiles((prev) => [...prev, ...Array.from(e.target.files!).filter(file => file.type.startsWith('image/'))]);
                       setBatchResults([]);
                     }
                   }}
@@ -376,13 +398,29 @@ export default function App() {
                     </span>
                   </div>
                   <button
-                    disabled={isBatchProcessing || isZipProcessing}
+                    disabled={busy}
                     onClick={() => { setBatchFiles([]); setBatchResults([]); }}
                     className="text-xs text-slate-400 hover:text-rose-500 underline"
                   >
                     목록 비우기
                   </button>
                 </div>
+              )}
+
+              {batchFiles.length > 0 && (
+                <ul aria-label="선택한 사진" className="divide-y divide-slate-200 border border-slate-200 rounded-xl">
+                  {batchFiles.map((file, index) => (
+                    <li key={`${file.name}-${index}`} className="flex items-center gap-3 justify-between p-3 text-xs">
+                      <span className="min-w-0 break-all">{file.name} · {formatSize(file.size)}</span>
+                      <button disabled={busy} aria-label={`${file.name} ${index + 1}번 사진 삭제`}
+                        className="shrink-0 text-rose-600 disabled:opacity-50"
+                        onClick={() => {
+                          setBatchFiles(files => files.filter((_, i) => i !== index));
+                          setBatchResults([]);
+                        }}>삭제</button>
+                    </li>
+                  ))}
+                </ul>
               )}
 
               {/* 진행률 바 */}
@@ -418,6 +456,7 @@ export default function App() {
                               ? `${Math.round((1 - result.blob.size / result.originalSize) * 100)}% 감소`
                               : `${Math.round((result.blob.size / result.originalSize - 1) * 100)}% 증가`}
                           </p>
+                          {result.blob.size > result.targetBytes && <p className="text-xs text-amber-700 mt-1">목표 용량 초과: 용량을 높이거나 JPEG로 다시 변환하세요.</p>}
                         </div>
                         <button
                           onClick={() => setPreview({ blob: result.blob, fileName: result.fileName })}
@@ -442,6 +481,7 @@ export default function App() {
 
         {/* 우측: 설정 컨트롤러 */}
         <div className="flex flex-col gap-5">
+          <fieldset disabled={busy} className="flex flex-col gap-5">
           {/* 비율 선택 */}
           <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
             <h3 className="text-sm font-bold text-slate-700 mb-3">1. 사진 비율</h3>
@@ -469,9 +509,9 @@ export default function App() {
               {SIZE_OPTIONS.map(({ label, value: mb }) => (
                 <button
                   key={mb}
-                  onClick={() => setTargetSizeMB(mb)}
+                  onClick={() => { setPresetSizeMB(mb); setCustomSizeKB(null); }}
                   className={`flex-1 py-1.5 text-xs rounded-lg font-medium border transition ${
-                    targetSizeMB === mb
+                    customSizeKB === null && targetSizeMB === mb
                       ? 'border-indigo-600 bg-indigo-50 text-indigo-700 font-semibold'
                       : 'border-slate-200 hover:bg-slate-50 text-slate-600'
                   }`}
@@ -480,16 +520,44 @@ export default function App() {
                 </button>
               ))}
             </div>
-            {targetSizeMB === 100 / 1024 && (
-              <p className="mt-3 text-xs text-amber-700" role="status">100KB는 작은 글자·세부 표현이 흐려질 수 있어요. 압축 후 미리보기로 확인하세요.</p>
+            <label className="block text-xs text-slate-600 mt-3">
+              목표 용량 직접 입력 (KB)
+              <input type="number" min="1" step="1" value={customSizeKB ?? ''} placeholder="예: 200"
+                onChange={event => setCustomSizeKB(event.target.value)}
+                className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2" />
+            </label>
+            {!validSize && <p role="alert" className="text-xs text-rose-600 mt-2">1KB 이상의 올바른 용량을 입력하세요.</p>}
+            {validSize && targetSizeMB <= 100 / 1024 && (
+              <p className="mt-3 text-xs text-amber-700" role="status">100KB 이하에서는 작은 글자·세부 표현이 흐려질 수 있어요. 압축 후 미리보기로 확인하세요.</p>
             )}
           </div>
+
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
+            <h3 className="text-sm font-bold text-slate-700 mb-3">3. 다운로드 형식</h3>
+            <div className="flex gap-2">
+              {(['image/jpeg', 'image/png'] as const).map(format => (
+                <button key={format} aria-pressed={outputFormat === format} onClick={() => setOutputFormat(format)}
+                  className={`flex-1 py-2 rounded-lg text-xs border ${outputFormat === format ? 'border-indigo-600 bg-indigo-50 text-indigo-700' : 'border-slate-200 text-slate-600'}`}>
+                  {format === 'image/jpeg' ? 'JPEG (기본)' : 'PNG'}
+                </button>
+              ))}
+            </div>
+            {outputFormat === 'image/jpeg' ? (
+              <label className="flex items-center justify-between gap-2 mt-3 text-xs text-slate-600">
+                투명 영역 배경색
+                <input aria-label="JPEG 배경색" type="color" value={jpegBackground} onChange={event => setJpegBackground(event.target.value)} />
+              </label>
+            ) : <p className="text-xs text-slate-600 mt-3">투명 배경을 유지합니다. 작은 목표 용량에서는 해상도가 낮아지거나 목표 용량을 초과할 수 있어요.</p>}
+            {outputFormat === 'image/jpeg' && <p className="text-xs text-slate-500 mt-2">JPEG는 투명 배경을 지원하지 않아 선택한 색으로 채웁니다.</p>}
+            <p className="text-xs text-slate-500 mt-2">설정을 바꾼 뒤에는 다시 변환하세요. 압축 시 긴 변은 최대 1920px로 줄어듭니다.</p>
+          </div>
+          </fieldset>
 
           {/* 동작 버튼 */}
           {tab === 'single' ? (
             <>
               <button
-                disabled={!singleImageSrc || isSingleProcessing}
+                disabled={!singleImageSrc || busy || !validSize || (aspect !== null && !croppedAreaPixels)}
                 onClick={handleSingleProcess}
                 className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-200 disabled:text-slate-400 text-white font-bold rounded-xl shadow-xs transition flex items-center justify-center gap-2 cursor-pointer"
               >
@@ -498,7 +566,7 @@ export default function App() {
                     <RefreshCw className="w-4 h-4 animate-spin" /> 압축 중...
                   </>
                 ) : (
-                  '자르기 & 압축하기'
+                  aspect === null ? '자르지 않고 압축하기' : '자르기 & 압축하기'
                 )}
               </button>
 
@@ -506,13 +574,14 @@ export default function App() {
                 <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-col gap-3">
                   <div className="flex justify-between items-center text-xs">
                     <span className="font-semibold text-slate-600">완료된 용량:</span>
-                    <span className={`font-bold text-sm ${singleResult.sizeKB > targetSizeMB * 1024 ? 'text-rose-600' : 'text-emerald-600'}`}>
-                      {singleResult.sizeKB} KB
+                    <span className={`font-bold text-sm ${singleResult.blob.size > singleResult.targetBytes ? 'text-rose-600' : 'text-emerald-600'}`}>
+                      {formatSize(singleResult.blob.size)}
                     </span>
                   </div>
 
+                  {singleResult.blob.size > singleResult.targetBytes && <p className="text-xs text-amber-700">목표 용량을 초과했습니다. 용량을 높이거나 JPEG로 다시 변환하세요.</p>}
                   <button
-                    onClick={() => setPreview({ blob: singleResult.blob, fileName: `${singleFileName}_resized.jpg` })}
+                    onClick={() => setPreview({ blob: singleResult.blob, fileName: singleResult.fileName })}
                     className="w-full py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold rounded-xl"
                   >압축 결과 미리보기</button>
                   <div className="flex gap-2">
@@ -524,7 +593,7 @@ export default function App() {
                     </button>
                     <a
                       href={singleResult.url}
-                      download={`${singleFileName}_resized.jpg`}
+                      download={singleResult.fileName}
                       className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 shadow-xs transition text-center"
                     >
                       <Download className="w-3.5 h-3.5 inline mr-1" /> 다운로드
@@ -536,7 +605,7 @@ export default function App() {
           ) : (
             <>
             <button
-              disabled={batchFiles.length === 0 || isBatchProcessing || isZipProcessing}
+              disabled={batchFiles.length === 0 || busy || !validSize}
               onClick={handleBatchProcess}
               className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-200 disabled:text-slate-400 text-white font-bold rounded-xl shadow-xs transition flex items-center justify-center gap-2 cursor-pointer"
             >

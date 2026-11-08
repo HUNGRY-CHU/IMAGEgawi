@@ -1,81 +1,27 @@
-import imageCompression from 'browser-image-compression';
-
-const loadImage = (file: File): Promise<HTMLImageElement> => {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.src = URL.createObjectURL(file);
-    img.onload = () => resolve(img);
-    img.onerror = (err) => reject(err);
-  });
-};
+import { compressImage, extensionFor, loadImage, renderImage, type OutputFormat } from './cropImage';
 
 export const centerCropAndCompress = async (
   file: File,
-  aspectRatio: number,
-  targetSizeMB: number = 1
+  aspectRatio: number | null,
+  targetSizeMB = 1,
+  format: OutputFormat = 'image/jpeg',
+  background = '#ffffff',
 ): Promise<{ blob: Blob; fileName: string }> => {
-  const img = await loadImage(file);
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
-
-  if (!ctx) throw new Error('Canvas context unavailable');
-
-  const imgWidth = img.width;
-  const imgHeight = img.height;
-  const originalAspect = imgWidth / imgHeight;
-
-  let cropWidth = imgWidth;
-  let cropHeight = imgHeight;
-  let startX = 0;
-  let startY = 0;
-
-  if (originalAspect > aspectRatio) {
-    cropWidth = imgHeight * aspectRatio;
-    startX = (imgWidth - cropWidth) / 2;
-  } else {
-    cropHeight = imgWidth / aspectRatio;
-    startY = (imgHeight - cropHeight) / 2;
-  }
-
-  canvas.width = cropWidth;
-  canvas.height = cropHeight;
-
-  ctx.drawImage(
-    img,
-    startX,
-    startY,
-    cropWidth,
-    cropHeight,
-    0,
-    0,
-    cropWidth,
-    cropHeight
-  );
-
-  URL.revokeObjectURL(img.src);
-
-  const croppedBlob = await new Promise<Blob>((resolve, reject) => {
-    canvas.toBlob(
-      (b) => (b ? resolve(b) : reject(new Error('toBlob error'))),
-      'image/jpeg',
-      0.95
-    );
-  });
-
-  const compressedFile = await imageCompression(
-    new File([croppedBlob], file.name, { type: 'image/jpeg' }),
-    {
-      maxSizeMB: targetSizeMB,
-      maxWidthOrHeight: 1920,
-      useWebWorker: true,
-      fileType: 'image/jpeg',
+  const url = URL.createObjectURL(file);
+  try {
+    const image = await loadImage(url);
+    const width = image.naturalWidth;
+    const height = image.naturalHeight;
+    let area = null;
+    if (aspectRatio !== null) {
+      const cropWidth = Math.min(width, height * aspectRatio);
+      const cropHeight = Math.min(height, width / aspectRatio);
+      area = { x: (width - cropWidth) / 2, y: (height - cropHeight) / 2, width: cropWidth, height: cropHeight };
     }
-  );
-
-  // 파일명을 원본명_resized.jpg 로 변경
-  const baseName = file.name.replace(/\.[^/.]+$/, '');
-  return {
-    blob: compressedFile,
-    fileName: `${baseName}_resized.jpg`,
-  };
+    const rendered = await renderImage(image, area, format, background);
+    const blob = await compressImage(rendered, targetSizeMB, format);
+    return { blob, fileName: `${file.name.replace(/\.[^/.]+$/, '')}_resized.${extensionFor(format)}` };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 };
