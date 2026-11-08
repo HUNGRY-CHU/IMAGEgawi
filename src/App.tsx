@@ -19,6 +19,12 @@ import {
   Info
 } from 'lucide-react';
 
+type BatchResult = { blob: Blob; fileName: string; originalSize: number };
+
+const formatSize = (bytes: number) => bytes >= 1024 * 1024
+  ? `${(bytes / (1024 * 1024)).toFixed(2)} MB`
+  : `${(bytes / 1024).toFixed(1)} KB`;
+
 const ASPECT_RATIOS = [
   { label: '증명/프로필 (3:4)', value: 3 / 4 },
   { label: '모바일 세로 (9:16)', value: 9 / 16 },
@@ -46,7 +52,8 @@ export default function App() {
   const [batchFiles, setBatchFiles] = useState<File[]>([]);
   const [batchProgress, setBatchProgress] = useState(0);
   const [isBatchProcessing, setIsBatchProcessing] = useState(false);
-  const [isBatchCompleted, setIsBatchCompleted] = useState(false);
+  const [batchResults, setBatchResults] = useState<BatchResult[]>([]);
+  const [isZipProcessing, setIsZipProcessing] = useState(false);
 
   // 드래그 앤 드롭 공통 핸들러
   const handleDragOver = (e: React.DragEvent) => {
@@ -66,6 +73,8 @@ export default function App() {
     e.stopPropagation();
     setIsDragging(false);
 
+    if (isBatchProcessing || isZipProcessing) return;
+
     const droppedFiles = Array.from(e.dataTransfer.files).filter((file) =>
       file.type.startsWith('image/')
     );
@@ -77,7 +86,7 @@ export default function App() {
     } else {
       setTab('batch');
       setBatchFiles((prev) => [...prev, ...droppedFiles]);
-      setIsBatchCompleted(false);
+      setBatchResults([]);
     }
   };
 
@@ -99,7 +108,7 @@ export default function App() {
       if (e.target.files.length > 1) {
         setTab('batch');
         setBatchFiles(Array.from(e.target.files).filter(f => f.type.startsWith('image/')));
-        setIsBatchCompleted(false);
+        setBatchResults([]);
       } else {
         loadSingleFile(e.target.files[0]);
       }
@@ -145,30 +154,48 @@ export default function App() {
     }
   };
 
-  // 여러 장 일괄 압축 및 ZIP 다운로드
+  // 변환 결과를 보관하여 개별 저장과 ZIP 저장에 함께 사용합니다.
   const handleBatchProcess = async () => {
-    if (batchFiles.length === 0) return;
+    if (batchFiles.length === 0 || isBatchProcessing || isZipProcessing) return;
     setIsBatchProcessing(true);
     setBatchProgress(0);
-    setIsBatchCompleted(false);
+    setBatchResults([]);
 
-    const zip = new JSZip();
-
+    const results: BatchResult[] = [];
+    const usedNames = new Set<string>();
     try {
       for (let i = 0; i < batchFiles.length; i++) {
         const file = batchFiles[i];
         const { blob, fileName } = await centerCropAndCompress(file, aspect, targetSizeMB);
-        zip.file(fileName, blob);
+        const baseName = fileName.replace(/\.jpg$/, '');
+        let uniqueName = fileName;
+        let suffix = 2;
+        while (usedNames.has(uniqueName.toLowerCase())) {
+          uniqueName = `${baseName}_${suffix++}.jpg`;
+        }
+        usedNames.add(uniqueName.toLowerCase());
+        results.push({ blob, fileName: uniqueName, originalSize: file.size });
         setBatchProgress(Math.round(((i + 1) / batchFiles.length) * 100));
       }
-
-      const zipContent = await zip.generateAsync({ type: 'blob' });
-      saveAs(zipContent, `images_resized_${Date.now()}.zip`);
-      setIsBatchCompleted(true);
+      setBatchResults(results);
     } catch {
-      alert('일괄 압축 도중 오류가 발생했습니다.');
+      alert('일괄 압축 도중 오류가 발생했습니다. 다시 시도해 주세요.');
     } finally {
       setIsBatchProcessing(false);
+    }
+  };
+
+  const downloadBatchZip = async () => {
+    if (batchResults.length === 0 || isZipProcessing) return;
+    setIsZipProcessing(true);
+    try {
+      const zip = new JSZip();
+      batchResults.forEach(({ fileName, blob }) => zip.file(fileName, blob));
+      saveAs(await zip.generateAsync({ type: 'blob' }), `images_resized_${Date.now()}.zip`);
+    } catch {
+      alert('ZIP 파일 생성에 실패했습니다. 개별 다운로드를 이용하거나 다시 시도해 주세요.');
+    } finally {
+      setIsZipProcessing(false);
     }
   };
 
@@ -208,7 +235,7 @@ export default function App() {
               tab === 'batch' ? 'bg-white text-indigo-600 shadow-xs' : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            <Layers className="w-3.5 h-3.5" /> 여러 장 일괄 변환 (ZIP)
+            <Layers className="w-3.5 h-3.5" /> 여러 장 일괄 변환
           </button>
         </div>
       </div>
@@ -280,12 +307,13 @@ export default function App() {
                 <span className="text-xs text-slate-400 mt-1">파일들을 계속 추가할 수 있습니다</span>
                 <input
                   type="file"
+                  disabled={isBatchProcessing || isZipProcessing}
                   accept="image/*"
                   multiple
                   onChange={(e) => {
                     if (e.target.files) {
                       setBatchFiles((prev) => [...prev, ...Array.from(e.target.files!)]);
-                      setIsBatchCompleted(false);
+                      setBatchResults([]);
                     }
                   }}
                   className="hidden"
@@ -302,7 +330,8 @@ export default function App() {
                     </span>
                   </div>
                   <button
-                    onClick={() => { setBatchFiles([]); setIsBatchCompleted(false); }}
+                    disabled={isBatchProcessing || isZipProcessing}
+                    onClick={() => { setBatchFiles([]); setBatchResults([]); }}
                     className="text-xs text-slate-400 hover:text-rose-500 underline"
                   >
                     목록 비우기
@@ -314,7 +343,7 @@ export default function App() {
               {isBatchProcessing && (
                 <div className="flex flex-col gap-1.5 mt-2">
                   <div className="flex justify-between text-xs text-slate-600 font-semibold">
-                    <span>압축 및 패키징 중...</span>
+                    <span>사진 압축 중...</span>
                     <span>{batchProgress}%</span>
                   </div>
                   <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
@@ -326,10 +355,34 @@ export default function App() {
                 </div>
               )}
 
-              {isBatchCompleted && (
-                <div className="flex items-center gap-2 p-3 bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs rounded-xl">
-                  <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
-                  <span>모든 사진 압축 완료! ZIP 파일이 즉시 다운로드되었습니다.</span>
+              {batchResults.length > 0 && (
+                <div className="flex flex-col gap-3" aria-live="polite">
+                  <div className="flex items-center gap-2 p-3 bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs rounded-xl">
+                    <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+                    <span>{batchResults.length}개 사진 압축 완료! 개별 다운로드하거나 ZIP으로 저장하세요.</span>
+                  </div>
+                  <ul className="divide-y divide-slate-200 rounded-xl border border-slate-200">
+                    {batchResults.map((result) => (
+                      <li key={result.fileName} className="flex flex-wrap items-center justify-between gap-3 p-3">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-xs font-semibold text-slate-700 break-all">{result.fileName}</p>
+                          <p className="text-xs text-slate-500 mt-1">
+                            {formatSize(result.originalSize)} → {formatSize(result.blob.size)}
+                            {' · '}{result.blob.size <= result.originalSize
+                              ? `${Math.round((1 - result.blob.size / result.originalSize) * 100)}% 감소`
+                              : `${Math.round((result.blob.size / result.originalSize - 1) * 100)}% 증가`}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => saveAs(result.blob, result.fileName)}
+                          aria-label={`${result.fileName} 다운로드`}
+                          className="flex items-center gap-1 px-3 py-2 text-xs font-semibold text-emerald-700 bg-emerald-50 rounded-lg hover:bg-emerald-100"
+                        >
+                          <Download className="w-3.5 h-3.5" /> 다운로드
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               )}
             </div>
@@ -423,8 +476,9 @@ export default function App() {
               )}
             </>
           ) : (
+            <>
             <button
-              disabled={batchFiles.length === 0 || isBatchProcessing}
+              disabled={batchFiles.length === 0 || isBatchProcessing || isZipProcessing}
               onClick={handleBatchProcess}
               className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-200 disabled:text-slate-400 text-white font-bold rounded-xl shadow-xs transition flex items-center justify-center gap-2 cursor-pointer"
             >
@@ -434,10 +488,20 @@ export default function App() {
                 </>
               ) : (
                 <>
-                  <Archive className="w-4 h-4" /> 일괄 변환 후 ZIP 다운로드
+                  <Layers className="w-4 h-4" /> 일괄 변환하기
                 </>
               )}
             </button>
+            {batchResults.length > 0 && (
+              <button
+                onClick={downloadBatchZip}
+                disabled={isZipProcessing || isBatchProcessing}
+                className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold rounded-xl flex items-center justify-center gap-2"
+              >
+                <Archive className="w-4 h-4" /> {isZipProcessing ? 'ZIP 생성 중...' : '전체 ZIP 다운로드'}
+              </button>
+            )}
+            </>
           )}
         </div>
       </main>
