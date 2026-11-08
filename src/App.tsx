@@ -182,8 +182,8 @@ export default function App() {
       {/* 헤더 */}
       <header className="bg-white border-b border-slate-200 py-3.5 px-6 flex justify-between items-center shadow-xs">
         <div>
-          <h1 className="text-xl font-bold text-slate-900">공문 사진 다이어트</h1>
-          <p className="text-xs text-slate-500">1MB 이하 자동 압축 & 공문 서식 규격 비율 크롭</p>
+          <h1 className="text-xl font-bold text-slate-900">이미지 가위</h1>
+          <p className="text-xs text-slate-500">원하는 비율로 자르고, 필요한 용량으로 압축하세요</p>
         </div>
         <div className="flex items-center text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-full font-medium">
           <ShieldCheck className="w-4 h-4 mr-1.5" />
