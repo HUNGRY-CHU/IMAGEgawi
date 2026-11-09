@@ -1,1 +1,40 @@
 @import "tailwindcss";
+
+/* Match PDFgawi's base typography and page spacing. */
+@theme {
+  --color-slate-50: #f8fafc;
+  --color-slate-100: #f1f5f9;
+  --color-slate-200: #e2e8f0;
+  --color-slate-300: #cbd5e1;
+  --color-slate-400: #94a3b8;
+  --color-slate-500: #64748b;
+  --color-slate-600: #475569;
+  --color-slate-700: #334155;
+  --color-slate-800: #1e293b;
+  --color-slate-900: #0f172a;
+  --color-indigo-600: #4f39f6;
+  --font-sans: ui-sans-serif, system-ui, sans-serif;
+}
+
+:root {
+  --accent: #4f39f6;
+  --muted: #475569;
+  --line: #e2e8f0;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  color: #1e293b;
+  background: #f8fafc;
+  line-height: 1.5;
+}
+
+body { margin: 0; min-width: 320px; }
+button { cursor: pointer; }
+button:disabled { cursor: default; opacity: .5; }
+:focus-visible { outline: 3px solid #615fff; outline-offset: 3px; }
+.gawi-main { align-items: start; }
+
+@media (max-width: 680px) {
+  .gawi-main { padding: 20px 16px; }
+}
+
+.settings-title { display: flex; align-items: center; gap: 9px; margin: 0 0 16px; color: #1e293b; font-size: 17px; font-weight: 700; letter-spacing: -.025em; }
+.settings-title span { display: grid; place-items: center; width: 26px; height: 25px; border-radius: 7px; color: var(--accent); background: #eef2ff; font-size: 11px; font-weight: 800; }

@@ -12,7 +12,6 @@ import {
   RefreshCw,
   Archive,
   Layers,
-  Crop as CropIcon,
   CheckCircle2,
   FileImage,
   X,
@@ -274,6 +273,14 @@ export default function App() {
           <h1>이미지 가위</h1>
           <p>원하는 비율로 자르고, 필요한 용량으로 압축하세요</p>
         </div>
+        <nav className="tool-tabs" aria-label="변환 도구">
+          <button aria-pressed={tab === 'single'} disabled={busy} onClick={() => setTab('single')}>
+            1장 정밀 크롭
+          </button>
+          <button aria-pressed={tab === 'batch'} disabled={busy} onClick={() => setTab('batch')}>
+            여러 장 일괄 변환
+          </button>
+        </nav>
         <div className="gawi-header-actions">
           <nav className="gawi-nav" aria-label="가위 도구">
             <a href="/" aria-current="page">이미지 가위</a>
@@ -289,31 +296,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* 모드 전환 탭 */}
-      <div className="max-w-5xl w-full mx-auto px-6 pt-5">
-        <div className="flex bg-slate-200 p-1 rounded-xl w-fit">
-          <button
-            disabled={busy}
-            onClick={() => setTab('single')}
-            className={`flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-lg transition ${
-              tab === 'single' ? 'bg-white text-indigo-600 shadow-xs' : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            <CropIcon className="w-3.5 h-3.5" /> 1장 정밀 크롭
-          </button>
-          <button
-            disabled={busy}
-            onClick={() => setTab('batch')}
-            className={`flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-lg transition ${
-              tab === 'batch' ? 'bg-white text-indigo-600 shadow-xs' : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            <Layers className="w-3.5 h-3.5" /> 여러 장 일괄 변환
-          </button>
-        </div>
-      </div>
-
-      <main className="flex-1 max-w-5xl w-full mx-auto p-6 grid grid-cols-1 md:grid-cols-3 gap-6">
+      <main className="gawi-main flex-1 max-w-5xl w-full mx-auto p-6 grid grid-cols-1 md:grid-cols-3 gap-6">
         {/* 좌측: 작업 영역 */}
         <div className="md:col-span-2 flex flex-col bg-white p-4 rounded-2xl border border-slate-200 shadow-xs min-h-[480px]">
           {tab === 'single' ? (
@@ -489,11 +472,11 @@ export default function App() {
         </div>
 
         {/* 우측: 설정 컨트롤러 */}
-        <div className="flex flex-col gap-5">
-          <fieldset disabled={busy} className="flex flex-col gap-5">
+        <div className="flex flex-col gap-6">
+          <fieldset disabled={busy} className="flex flex-col gap-6">
           {/* 비율 선택 */}
           <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
-            <h3 className="text-sm font-bold text-slate-700 mb-3">1. 사진 비율</h3>
+            <h3 className="settings-title"><span>01</span> 사진 비율</h3>
             <div className="grid grid-cols-1 gap-2">
               {ASPECT_RATIOS.map((item) => (
                 <button
@@ -513,7 +496,7 @@ export default function App() {
 
           {/* 목표 용량 선택 */}
           <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
-            <h3 className="text-sm font-bold text-slate-700 mb-3">2. 사진당 최대 용량</h3>
+            <h3 className="settings-title"><span>02</span> 사진당 최대 용량</h3>
             <div className="grid grid-cols-3 gap-2">
               {SIZE_OPTIONS.map(({ label, value: mb }) => (
                 <button
@@ -542,7 +525,7 @@ export default function App() {
           </div>
 
           <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
-            <h3 className="text-sm font-bold text-slate-700 mb-3">3. 다운로드 형식</h3>
+            <h3 className="settings-title"><span>03</span> 다운로드 형식</h3>
             <div className="flex gap-2">
               {(['image/jpeg', 'image/png'] as const).map(format => (
                 <button key={format} aria-pressed={outputFormat === format} onClick={() => setOutputFormat(format)}
