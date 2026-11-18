@@ -1,6 +1,7 @@
 import './site-header.css';
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import Cropper, { type Area } from 'react-easy-crop';
+import FreeCropper from './FreeCropper';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 import { getCroppedImg, compressImage, extensionFor, toClipboardPng, type OutputFormat } from './utils/cropImage';
@@ -71,6 +72,7 @@ function ImagePreview({ blob, fileName, onClose }: { blob: Blob; fileName: strin
 
 const ASPECT_RATIOS = [
   { label: '원본 비율 유지 (자르지 않기)', value: null },
+  { label: '자유 편집', value: 'free' as const },
   { label: '증명/프로필 (3:4)', value: 3 / 4 },
   { label: '모바일 세로 (9:16)', value: 9 / 16 },
   { label: '공문 활동사진 (4:3)', value: 4 / 3 },
@@ -81,6 +83,8 @@ const ASPECT_RATIOS = [
 export default function App() {
   const [tab, setTab] = useState<'single' | 'batch'>('single');
   const [aspect, setAspect] = useState<number | null>(3 / 4);
+  const [freeCropEnabled, setFreeCropEnabled] = useState(false);
+  const freeCrop = tab === 'single' && freeCropEnabled;
   const [presetSizeMB, setPresetSizeMB] = useState<number>(300 / 1024);
   const [customSizeKB, setCustomSizeKB] = useState<string | null>(null);
   const targetSizeMB = customSizeKB === null ? presetSizeMB : Number(customSizeKB) / 1024;
@@ -96,6 +100,9 @@ export default function App() {
   const [crop, setCrop] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [croppedAreaPixels, setCroppedAreaPixels] = useState<Area | null>(null);
+  const [freeArea, setFreeArea] = useState<Area | null>(null);
+  const selectedArea = freeCrop ? freeArea : aspect === null ? null : croppedAreaPixels;
+  const needsCrop = freeCrop || aspect !== null;
   const [isSingleProcessing, setIsSingleProcessing] = useState(false);
   const [singleResult, setSingleResult] = useState<{ url: string; blob: Blob; fileName: string; targetBytes: number } | null>(null);
 
@@ -158,6 +165,7 @@ export default function App() {
       setCrop({ x: 0, y: 0 });
       setZoom(1);
       setCroppedAreaPixels(null);
+      setFreeArea(null);
       setSingleImageSrc(reader.result as string);
       setSingleResult(null);
     });
@@ -182,10 +190,10 @@ export default function App() {
 
   // 1장 크롭 및 압축
   const handleSingleProcess = async () => {
-    if (!singleImageSrc || (aspect !== null && !croppedAreaPixels) || !validSize || busy) return;
+    if (!singleImageSrc || (needsCrop && !selectedArea) || !validSize || busy) return;
     setIsSingleProcessing(true);
     try {
-      const croppedBlob = await getCroppedImg(singleImageSrc, aspect === null ? null : croppedAreaPixels, outputFormat, jpegBackground);
+      const croppedBlob = await getCroppedImg(singleImageSrc, selectedArea, outputFormat, jpegBackground);
       const finalBlob = await compressImage(croppedBlob, targetSizeMB, outputFormat);
       const url = URL.createObjectURL(finalBlob);
 
@@ -313,7 +321,7 @@ export default function App() {
             ) : (
               <div className="flex-1 flex flex-col">
                 <div className="flex justify-between items-center mb-2">
-                  <span className="text-xs font-bold text-slate-600">{aspect === null ? '전체 이미지를 자르지 않고 압축합니다' : '위치를 드래그하여 맞추세요'}</span>
+                  <span className="text-xs font-bold text-slate-600">{freeCrop ? '모서리나 가장자리를 끌어 크기를 조절하고, 틀 안쪽을 끌어 이동하세요' : aspect === null ? '전체 이미지를 자르지 않고 압축합니다' : '위치를 드래그하여 맞추세요'}</span>
                   <button
                     disabled={busy}
                     onClick={() => { setSingleImageSrc(null); setSingleResult(null); }}
@@ -323,7 +331,9 @@ export default function App() {
                   </button>
                 </div>
                 <div className="relative w-full h-[380px] bg-slate-950 rounded-xl overflow-hidden">
-                  {aspect === null ? (
+                  {freeCrop ? (
+                    <FreeCropper key={singleImageSrc} src={singleImageSrc} area={freeArea} onChange={setFreeArea} disabled={busy} />
+                  ) : aspect === null ? (
                     <img src={singleImageSrc} alt="압축할 원본 이미지" className="w-full h-full object-contain" />
                   ) : <Cropper
                     image={singleImageSrc}
@@ -335,7 +345,7 @@ export default function App() {
                     onZoomChange={setZoom}
                   />}
                 </div>
-                {aspect !== null && <div className="mt-4 flex items-center gap-3">
+                {!freeCrop && aspect !== null && <div className="mt-4 flex items-center gap-3">
                   <span className="text-xs font-medium text-slate-500">확대</span>
                   <input
                     type="range"
@@ -478,19 +488,26 @@ export default function App() {
           <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
             <h3 className="settings-title"><span>01</span> 사진 비율</h3>
             <div className="grid grid-cols-1 gap-2">
-              {ASPECT_RATIOS.map((item) => (
-                <button
-                  key={item.label}
-                  onClick={() => setAspect(item.value)}
-                  className={`text-left px-3 py-2 text-xs rounded-xl font-medium transition ${
-                    aspect === item.value
-                      ? 'bg-indigo-600 text-white shadow-xs'
-                      : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-                  }`}
-                >
-                  {item.label}
-                </button>
-              ))}
+              {ASPECT_RATIOS.filter((item) => tab === 'single' || item.value !== 'free').map((item) => {
+                const selected = freeCrop ? item.value === 'free' : item.value === aspect;
+                return (
+                  <button
+                    key={item.label}
+                    aria-pressed={selected}
+                    onClick={() => {
+                      if (tab === 'single') setFreeCropEnabled(item.value === 'free');
+                      if (item.value !== 'free') setAspect(item.value);
+                    }}
+                    className={`text-left px-3 py-2 text-xs rounded-xl font-medium transition ${
+                      selected
+                        ? 'bg-indigo-600 text-white shadow-xs'
+                        : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                    }`}
+                  >
+                    {item.label}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -549,7 +566,7 @@ export default function App() {
           {tab === 'single' ? (
             <>
               <button
-                disabled={!singleImageSrc || busy || !validSize || (aspect !== null && !croppedAreaPixels)}
+                disabled={!singleImageSrc || busy || !validSize || (needsCrop && !selectedArea)}
                 onClick={handleSingleProcess}
                 className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-200 disabled:text-slate-400 text-white font-bold rounded-xl shadow-xs transition flex items-center justify-center gap-2 cursor-pointer"
               >
@@ -558,7 +575,7 @@ export default function App() {
                     <RefreshCw className="w-4 h-4 animate-spin" /> 압축 중...
                   </>
                 ) : (
-                  aspect === null ? '자르지 않고 압축하기' : '자르기 & 압축하기'
+                  needsCrop ? '자르기 & 압축하기' : '자르지 않고 압축하기'
                 )}
               </button>
 
